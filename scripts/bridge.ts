@@ -63,7 +63,7 @@ const OAPP_ABI = [
     'function endpoint() view returns (address)',
     'function peers(uint32) view returns (bytes32)',
     'function enforcedOptions(uint32,uint16) view returns (bytes)',
-    'function quoteSend((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),bool) view returns ((uint256,uint256))',
+    'function quoteSend((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),bool) view returns ((uint256 nativeFee,uint256 lzTokenFee))',
     'function send((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),(uint256,uint256),address) payable',
 ]
 const ENDPOINT_ABI = [
