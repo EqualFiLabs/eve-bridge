@@ -11,6 +11,7 @@ typechain-types
 cache
 artifacts
 broadcast
+generated
 
 
 # LayerZero specific files
