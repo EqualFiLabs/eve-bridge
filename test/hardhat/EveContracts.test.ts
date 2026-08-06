@@ -25,7 +25,6 @@ describe('EVE bridge contracts', function () {
         const adapter = await (
             await ethers.getContractFactory('EveOFTAdapter')
         ).deploy(token.address, endpoint.address, delegate.address)
-
         expect(await adapter.token()).to.equal(token.address)
         expect(await adapter.owner()).to.equal(delegate.address)
         expect(await adapter.sharedDecimals()).to.equal(6)
@@ -36,6 +35,34 @@ describe('EVE bridge contracts', function () {
             reverted = true
         }
         expect(reverted).to.equal(true)
+    })
+
+    it('transfers ownership in two steps and synchronizes endpoint delegation', async function () {
+        const token = await (await ethers.getContractFactory('EveERC20Mock')).deploy()
+        const delegateEndpoint = await (await ethers.getContractFactory('EndpointDelegateMock')).deploy()
+        const adapter = await (
+            await ethers.getContractFactory('EveOFTAdapter')
+        ).deploy(token.address, delegateEndpoint.address, delegate.address)
+        const oft = await (await ethers.getContractFactory('EveOFT')).deploy(delegateEndpoint.address, delegate.address)
+
+        for (const oapp of [adapter, oft]) {
+            await oapp.connect(delegate).transferOwnership(outsider.address)
+            expect(await oapp.owner()).to.equal(delegate.address)
+            expect(await oapp.pendingOwner()).to.equal(outsider.address)
+            expect(await delegateEndpoint.delegates(oapp.address)).to.equal(delegate.address)
+
+            await oapp.connect(outsider).acceptOwnership()
+            expect(await oapp.owner()).to.equal(outsider.address)
+            expect(await delegateEndpoint.delegates(oapp.address)).to.equal(outsider.address)
+
+            let renounceReverted = false
+            try {
+                await oapp.connect(outsider).renounceOwnership()
+            } catch {
+                renounceReverted = true
+            }
+            expect(renounceReverted).to.equal(true)
+        }
     })
 
     it('deploys a zero-supply permit-enabled destination OFT', async function () {

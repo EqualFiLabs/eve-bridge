@@ -15,14 +15,15 @@ one EveOFTAdapter on Base <------ LayerZero V2 ------> EveOFT on Robinhood
 
 Base is the only collateral origin. Sending from Base transfers canonical EVE into the adapter and mints the same normalized amount on the destination. Sending back burns destination EVE and releases the locked Base token. Transfers between destination OFTs burn on the source and mint on the destination; they do not touch Base collateral.
 
-The accessible-supply invariant is:
+The bridge solvency invariant is:
 
 ```text
-canonical EVE outside the adapter + total supply of every remote OFT
-= canonical Base supply
+adapter EVE balance >= total supply of every remote OFT
 ```
 
-This assumes the canonical token remains lossless and every peer/security configuration is correct. There must never be a second adapter for canonical EVE.
+For ordinary bridge transfers, locked collateral and aggregate remote supply are equal. Anyone can transfer EVE directly to the adapter without minting remote supply; that creates stranded surplus collateral, so monitoring must not assume strict equality. The full accounting identity is `canonical outside adapter + remote supply + adapter surplus = canonical Base supply`.
+
+These invariants assume the canonical token remains lossless and every peer/security configuration is correct. There must never be a second adapter for canonical EVE.
 
 ## Contracts
 
@@ -40,4 +41,4 @@ The shared-decimal value is 6, LayerZero's standard OFT default. EVE has 18 loca
 
 ## Administration
 
-The owner and LayerZero delegate are the same 2-of-2 Safe on every chain. Ownership controls peers and enforced options; endpoint delegation controls message libraries, executors, DVNs, and confirmation settings. Those permissions collectively protect the bridge supply invariant and must be treated as critical custody roles.
+The owner and LayerZero delegate are the same 2-of-2 Safe on every chain. Ownership controls peers and enforced options; endpoint delegation controls message libraries, executors, DVNs, and confirmation settings. Ownership transfers are two-step, acceptance atomically updates the endpoint delegate, and renunciation is disabled so the roles cannot silently split. Those permissions collectively protect the bridge supply invariant and must be treated as critical custody roles.

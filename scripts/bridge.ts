@@ -3,7 +3,7 @@ import 'dotenv/config'
 import fs from 'fs'
 import path from 'path'
 
-import { BigNumber, Contract, Wallet, providers, utils } from 'ethers'
+import { BigNumber, Contract, Wallet, constants, providers, utils } from 'ethers'
 
 import { Options } from '@layerzerolabs/lz-v2-utilities'
 
@@ -47,10 +47,17 @@ const ERC20_ABI = [
     'function name() view returns (string)',
     'function symbol() view returns (string)',
     'function decimals() view returns (uint8)',
+    'function pool() view returns (address)',
+    'function isPoolUnlocked() view returns (bool)',
     'function allowance(address,address) view returns (uint256)',
     'function approve(address,uint256) returns (bool)',
 ]
-const SAFE_ABI = ['function getOwners() view returns (address[])', 'function getThreshold() view returns (uint256)']
+const SAFE_ABI = [
+    'function masterCopy() view returns (address)',
+    'function getOwners() view returns (address[])',
+    'function getThreshold() view returns (uint256)',
+    'function getModulesPaginated(address,uint256) view returns (address[],address)',
+]
 const OAPP_ABI = [
     'function owner() view returns (address)',
     'function endpoint() view returns (address)',
@@ -61,8 +68,11 @@ const OAPP_ABI = [
 ]
 const ENDPOINT_ABI = [
     'function getSendLibrary(address,uint32) view returns (address)',
+    'function isDefaultSendLibrary(address,uint32) view returns (bool)',
     'function getReceiveLibrary(address,uint32) view returns (address,bool)',
+    'function receiveLibraryTimeout(address,uint32) view returns (address,uint256)',
     'function getConfig(address,address,uint32,uint32) view returns (bytes)',
+    'function delegates(address) view returns (address)',
 ]
 const ENDPOINT_CONFIGURATION_INTERFACE = new utils.Interface([
     'function setSendLibrary(address,uint32,address)',
@@ -73,6 +83,10 @@ const OAPP_CONFIGURATION_INTERFACE = new utils.Interface([
     'function setEnforcedOptions((uint32 eid,uint16 msgType,bytes options)[])',
     'function setPeer(uint32,bytes32)',
 ])
+const MESSAGE_LIBRARY_ABI = [
+    'function getAppUlnConfig(address,uint32) view returns (tuple(uint64 confirmations,uint8 requiredDVNCount,uint8 optionalDVNCount,uint8 optionalDVNThreshold,address[] requiredDVNs,address[] optionalDVNs))',
+    'function executorConfigs(address,uint32) view returns (uint32 maxMessageSize,address executor)',
+]
 
 function parseArguments(values: string[]): { command: string; args: Arguments } {
     const [command = 'help', ...rest] = values
@@ -184,6 +198,16 @@ async function preflight(): Promise<void> {
             throw new Error(`${chain} RPC returned chain ID ${network.chainId}`)
 
         await assertCode(chain, NETWORKS[chain].endpoint, 'LayerZero EndpointV2')
+        const componentHashes: Record<string, string> = {}
+        for (const [label, address] of Object.entries({
+            sendLibrary: NETWORKS[chain].sendLibrary,
+            receiveLibrary: NETWORKS[chain].receiveLibrary,
+            executor: NETWORKS[chain].executor,
+            requiredDvn0: NETWORKS[chain].requiredDvns[0],
+            requiredDvn1: NETWORKS[chain].requiredDvns[1],
+        })) {
+            componentHashes[label] = utils.keccak256(await assertCode(chain, address, label))
+        }
         const factoryCode = await assertCode(chain, CREATE2_FACTORY, 'CREATE2 factory')
         const factoryHash = utils.keccak256(factoryCode)
         if (factoryHash !== CREATE2_FACTORY_RUNTIME_HASH) {
@@ -192,26 +216,50 @@ async function preflight(): Promise<void> {
 
         const safeCode = await assertCode(chain, EVE.ownerAndDelegate, 'owner/delegate Safe')
         const safe = new Contract(EVE.ownerAndDelegate, SAFE_ABI, chainProvider)
-        const [owners, threshold] = await Promise.all([safe.getOwners(), safe.getThreshold()])
+        const [singleton, owners, threshold, modulesResult] = await Promise.all([
+            safe.masterCopy(),
+            safe.getOwners(),
+            safe.getThreshold(),
+            safe.getModulesPaginated('0x0000000000000000000000000000000000000001', 50),
+        ])
         const normalizedOwners = (owners as string[]).map((owner) => owner.toLowerCase()).sort()
         const expectedOwners = [...EVE.safeOwners].map((owner) => owner.toLowerCase()).sort()
         if (JSON.stringify(normalizedOwners) !== JSON.stringify(expectedOwners) || !threshold.eq(EVE.safeThreshold)) {
             throw new Error(`${chain} Safe ownership or threshold differs from the approved 2-of-2`)
         }
+        if (singleton.toLowerCase() !== EVE.safeSingleton.toLowerCase()) {
+            throw new Error(`${chain} Safe singleton differs from the approved implementation`)
+        }
+        if (modulesResult[0].length !== 0) throw new Error(`${chain} Safe has enabled modules`)
+        const singletonCode = await assertCode(chain, singleton, 'Safe singleton')
 
+        const predictedCode = await chainProvider.getCode(predicted[chain].predictedAddress)
+        if (predictedCode !== '0x') {
+            throw new Error(`${chain} predicted address is already occupied: ${predicted[chain].predictedAddress}`)
+        }
         results[chain] = {
             chainId: network.chainId,
             endpoint: NETWORKS[chain].endpoint,
+            componentRuntimeHashes: componentHashes,
             factoryRuntimeHash: factoryHash,
             safeRuntimeHash: utils.keccak256(safeCode),
+            safeSingleton: singleton,
+            safeSingletonRuntimeHash: utils.keccak256(singletonCode),
+            safeModules: modulesResult[0],
             predictedAddress: predicted[chain].predictedAddress,
-            predictedAddressHasCode: (await chainProvider.getCode(predicted[chain].predictedAddress)) !== '0x',
+            predictedAddressHasCode: false,
         }
     }
 
     const tokenCode = await assertCode('base', EVE.canonicalToken, 'canonical EVE')
     const token = new Contract(EVE.canonicalToken, ERC20_ABI, provider('base'))
-    const [name, symbol, decimals] = await Promise.all([token.name(), token.symbol(), token.decimals()])
+    const [name, symbol, decimals, pool, isPoolUnlocked] = await Promise.all([
+        token.name(),
+        token.symbol(),
+        token.decimals(),
+        token.pool(),
+        token.isPoolUnlocked(),
+    ])
     if (name !== EVE.name || symbol !== EVE.symbol || decimals !== 18) {
         throw new Error(`Canonical token metadata mismatch: ${name}/${symbol}/${decimals}`)
     }
@@ -221,6 +269,12 @@ async function preflight(): Promise<void> {
         symbol,
         decimals,
         runtimeHash: utils.keccak256(tokenCode),
+        pool,
+        isPoolUnlocked,
+        adapterCanReceive: pool.toLowerCase() !== predicted.base.predictedAddress.toLowerCase() || isPoolUnlocked,
+    }
+    if (pool.toLowerCase() === predicted.base.predictedAddress.toLowerCase() && !isPoolUnlocked) {
+        throw new Error('Canonical token pool lock would prevent transfers into the predicted adapter')
     }
     process.stdout.write(`${JSON.stringify(results, null, 2)}\n`)
 }
@@ -252,7 +306,7 @@ function configurationTransactions(
         [
             'tuple(uint64 confirmations,uint8 requiredDVNCount,uint8 optionalDVNCount,uint8 optionalDVNThreshold,address[] requiredDVNs,address[] optionalDVNs)',
         ],
-        [[PATHWAY.confirmations, local.requiredDvns.length, 0, 0, [...local.requiredDvns], []]]
+        [[PATHWAY.confirmations, local.requiredDvns.length, 255, 0, [...local.requiredDvns], []]]
     )
     const enforcedOptions = Options.newOptions()
         .addExecutorLzReceiveOption(PATHWAY.receiveGas, PATHWAY.receiveValue)
@@ -356,8 +410,10 @@ async function prepare(args: Arguments): Promise<void> {
     const serialized = `${JSON.stringify(manifest, null, 2)}\n`
     const output = args.out
     if (typeof output === 'string') {
-        fs.writeFileSync(path.resolve(output), serialized, { flag: 'wx' })
-        process.stdout.write(`Wrote unsigned manifest to ${path.resolve(output)}\n`)
+        const resolvedOutput = path.resolve(output)
+        fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true })
+        fs.writeFileSync(resolvedOutput, serialized, { flag: 'wx' })
+        process.stdout.write(`Wrote unsigned manifest to ${resolvedOutput}\n`)
     } else {
         process.stdout.write(serialized)
     }
@@ -381,10 +437,18 @@ async function quote(
     const chain = requiredString(args, 'from') as ChainName
     if (chain !== 'base' && chain !== 'robinhood') throw new Error('--from must be base or robinhood')
     const recipient = utils.getAddress(requiredString(args, 'to'))
+    if (recipient === constants.AddressZero) throw new Error('Recipient must not be the zero address')
     const amount = utils.parseUnits(requiredString(args, 'amount'), 18)
     const predicted = plans()
     const address = predicted[chain].predictedAddress
     await assertCode(chain, address, chain === 'base' ? 'EveOFTAdapter' : 'EveOFT')
+    if (chain === 'robinhood') {
+        const baseToken = new Contract(EVE.canonicalToken, ERC20_ABI, provider('base'))
+        const [pool, isPoolUnlocked] = await Promise.all([baseToken.pool(), baseToken.isPoolUnlocked()])
+        if (recipient.toLowerCase() === pool.toLowerCase() && !isPoolUnlocked) {
+            throw new Error('Recipient is the canonical token locked pool and cannot receive returned EVE')
+        }
+    }
     const destination = chain === 'base' ? NETWORKS.robinhood : NETWORKS.base
     const contract = new Contract(address, OAPP_ABI, provider(chain))
     const param = sendParam(destination.eid, recipient, amount)
@@ -444,20 +508,41 @@ async function pathwayStatus(chain: ChainName, localAddress: string, remoteAddre
     const chainProvider = provider(chain)
     const oapp = new Contract(localAddress, OAPP_ABI, chainProvider)
     const endpoint = new Contract(local.endpoint, ENDPOINT_ABI, chainProvider)
-    const [owner, configuredEndpoint, peer, sendLibrary, receiveLibraryResult, option1, option2] = await Promise.all([
+    const [
+        owner,
+        configuredEndpoint,
+        configuredDelegate,
+        peer,
+        sendLibrary,
+        isDefaultSendLibrary,
+        receiveLibraryResult,
+        receiveLibraryTimeoutResult,
+        latestBlock,
+        option1,
+        option2,
+    ] = await Promise.all([
         oapp.owner(),
         oapp.endpoint(),
+        endpoint.delegates(localAddress),
         oapp.peers(remote.eid),
         endpoint.getSendLibrary(localAddress, remote.eid),
+        endpoint.isDefaultSendLibrary(localAddress, remote.eid),
         endpoint.getReceiveLibrary(localAddress, remote.eid),
+        endpoint.receiveLibraryTimeout(localAddress, remote.eid),
+        chainProvider.getBlock('latest'),
         oapp.enforcedOptions(remote.eid, 1),
         oapp.enforcedOptions(remote.eid, 2),
     ])
     const receiveLibrary = receiveLibraryResult[0]
-    const [executorBytes, sendUlnBytes, receiveUlnBytes] = await Promise.all([
+    const sendMessageLibrary = new Contract(sendLibrary, MESSAGE_LIBRARY_ABI, chainProvider)
+    const receiveMessageLibrary = new Contract(receiveLibrary, MESSAGE_LIBRARY_ABI, chainProvider)
+    const [executorBytes, sendUlnBytes, receiveUlnBytes, appExecutor, sendAppUln, receiveAppUln] = await Promise.all([
         endpoint.getConfig(localAddress, sendLibrary, remote.eid, 1),
         endpoint.getConfig(localAddress, sendLibrary, remote.eid, 2),
         endpoint.getConfig(localAddress, receiveLibrary, remote.eid, 2),
+        sendMessageLibrary.executorConfigs(localAddress, remote.eid),
+        sendMessageLibrary.getAppUlnConfig(localAddress, remote.eid),
+        receiveMessageLibrary.getAppUlnConfig(localAddress, remote.eid),
     ])
     const executor = utils.defaultAbiCoder.decode(['uint32', 'address'], executorBytes)
     const ulnType = 'tuple(uint64,uint8,uint8,uint8,address[],address[])'
@@ -466,41 +551,114 @@ async function pathwayStatus(chain: ChainName, localAddress: string, remoteAddre
     const expectedDvns = [...local.requiredDvns].map((dvn) => dvn.toLowerCase()).sort()
     const dvnsMatch = (dvns: string[]) =>
         JSON.stringify(dvns.map((dvn) => dvn.toLowerCase()).sort()) === JSON.stringify(expectedDvns)
+    const appUlnMatches = (appUln: {
+        confirmations: BigNumber
+        requiredDVNCount: number
+        optionalDVNCount: number
+        optionalDVNThreshold: number
+        requiredDVNs: string[]
+        optionalDVNs: string[]
+    }) =>
+        appUln.confirmations.eq(PATHWAY.confirmations) &&
+        appUln.requiredDVNCount === local.requiredDvns.length &&
+        appUln.optionalDVNCount === 255 &&
+        appUln.optionalDVNThreshold === 0 &&
+        dvnsMatch(appUln.requiredDVNs) &&
+        appUln.optionalDVNs.length === 0
     const expectedOptions = Options.newOptions()
         .addExecutorLzReceiveOption(PATHWAY.receiveGas, PATHWAY.receiveValue)
         .toHex()
+    const ownerMatches = owner.toLowerCase() === EVE.ownerAndDelegate.toLowerCase()
+    const endpointMatches = configuredEndpoint.toLowerCase() === local.endpoint.toLowerCase()
+    const delegateMatches = configuredDelegate.toLowerCase() === EVE.ownerAndDelegate.toLowerCase()
+    const peerMatches = peer.toLowerCase() === asBytes32(remoteAddress).toLowerCase()
+    const sendLibraryMatches = sendLibrary.toLowerCase() === local.sendLibrary.toLowerCase()
+    const sendLibraryIsExplicit = !isDefaultSendLibrary
+    const receiveLibraryMatches =
+        receiveLibrary.toLowerCase() === local.receiveLibrary.toLowerCase() && !receiveLibraryResult[1]
+    const receiveLibraryTimeoutInactive = !receiveLibraryTimeoutResult[1].gt(latestBlock.number)
+    const executorMatches =
+        executor[0] === 10_000 &&
+        executor[1].toLowerCase() === local.executor.toLowerCase() &&
+        appExecutor.maxMessageSize === 10_000 &&
+        appExecutor.executor.toLowerCase() === local.executor.toLowerCase()
+    const sendUlnMatches =
+        sendUln[0].eq(PATHWAY.confirmations) &&
+        sendUln[1] === local.requiredDvns.length &&
+        sendUln[2] === 0 &&
+        sendUln[3] === 0 &&
+        dvnsMatch(sendUln[4]) &&
+        sendUln[5].length === 0 &&
+        appUlnMatches(sendAppUln)
+    const receiveUlnMatches =
+        receiveUln[0].eq(PATHWAY.confirmations) &&
+        receiveUln[1] === local.requiredDvns.length &&
+        receiveUln[2] === 0 &&
+        receiveUln[3] === 0 &&
+        dvnsMatch(receiveUln[4]) &&
+        receiveUln[5].length === 0 &&
+        appUlnMatches(receiveAppUln)
+    const msgType1Matches = option1.toLowerCase() === expectedOptions.toLowerCase()
+    const msgType2Matches = option2.toLowerCase() === expectedOptions.toLowerCase()
+    const allChecksPass = [
+        ownerMatches,
+        endpointMatches,
+        delegateMatches,
+        peerMatches,
+        sendLibraryMatches,
+        sendLibraryIsExplicit,
+        receiveLibraryMatches,
+        receiveLibraryTimeoutInactive,
+        executorMatches,
+        sendUlnMatches,
+        receiveUlnMatches,
+        msgType1Matches,
+        msgType2Matches,
+    ].every(Boolean)
 
     return {
         chain,
         address: localAddress,
         owner,
-        ownerMatches: owner.toLowerCase() === EVE.ownerAndDelegate.toLowerCase(),
+        ownerMatches,
         endpoint: configuredEndpoint,
-        endpointMatches: configuredEndpoint.toLowerCase() === local.endpoint.toLowerCase(),
+        endpointMatches,
+        delegate: configuredDelegate,
+        delegateMatches,
         peer,
-        peerMatches: peer.toLowerCase() === asBytes32(remoteAddress).toLowerCase(),
+        peerMatches,
         sendLibrary,
-        sendLibraryMatches: sendLibrary.toLowerCase() === local.sendLibrary.toLowerCase(),
+        sendLibraryMatches,
+        sendLibraryIsExplicit,
         receiveLibrary,
-        receiveLibraryMatches: receiveLibrary.toLowerCase() === local.receiveLibrary.toLowerCase(),
+        receiveLibraryMatches,
+        receiveLibraryTimeout: {
+            library: receiveLibraryTimeoutResult[0],
+            expiry: receiveLibraryTimeoutResult[1].toString(),
+            inactive: receiveLibraryTimeoutInactive,
+        },
         executor: executor[1],
-        executorMatches: executor[1].toLowerCase() === local.executor.toLowerCase(),
+        appExecutor: appExecutor.executor,
+        executorMatches,
         sendUln: {
             confirmations: sendUln[0].toString(),
             requiredDvns: sendUln[4],
-            matches: sendUln[0].eq(PATHWAY.confirmations) && dvnsMatch(sendUln[4]),
+            matches: sendUlnMatches,
+            appOptionalDvnCount: sendAppUln.optionalDVNCount,
         },
         receiveUln: {
             confirmations: receiveUln[0].toString(),
             requiredDvns: receiveUln[4],
-            matches: receiveUln[0].eq(PATHWAY.confirmations) && dvnsMatch(receiveUln[4]),
+            matches: receiveUlnMatches,
+            appOptionalDvnCount: receiveAppUln.optionalDVNCount,
         },
         enforcedOptions: {
             msgType1: option1,
-            msgType1Matches: option1.toLowerCase() === expectedOptions.toLowerCase(),
+            msgType1Matches,
             msgType2: option2,
-            msgType2Matches: option2.toLowerCase() === expectedOptions.toLowerCase(),
+            msgType2Matches,
         },
+        allChecksPass,
     }
 }
 
@@ -517,6 +675,7 @@ async function status(): Promise<void> {
         pathwayStatus('robinhood', robinhoodAddress, baseAddress),
     ])
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    if (!result.every(({ allChecksPass }) => allChecksPass)) throw new Error('One or more pathway status checks failed')
 }
 
 function help(): void {

@@ -3,7 +3,11 @@
 ## Trust assumptions
 
 - Canonical EVE remains a lossless 18-decimal ERC-20. A future transfer fee, rebase, or other balance-changing behavior would invalidate the stock adapter accounting.
+- The canonical token's pool lock must never target the adapter while locked; doing so would block new Base-to-remote transfers.
+- Direct ERC-20 transfers to the adapter do not mint remote EVE and become stranded surplus; monitor solvency as collateral greater than or equal to aggregate remote supply.
+- A return recipient on Base must not be the canonical token's currently locked pool. That transfer would revert after the remote burn and remain undeliverable; the operator CLI rejects the live locked-pool address.
 - The 2-of-2 Safe owners verify every deployment and configuration transaction on the correct chain before signing.
+- The approved Safe singleton remains installed and no module is enabled; modules can bypass the normal signature threshold.
 - Both required DVNs, LayerZero Labs and Nethermind, must verify a message. Twenty source-chain confirmations are required in each direction.
 - The configured LayerZero endpoints, message libraries, executors, and destination chains continue to operate as expected.
 - Only the committed Base adapter is treated as canonical. Deploying another adapter can fragment or inflate the global representation.
@@ -11,6 +15,8 @@
 ## Privileged actions
 
 The Safe can change peers, message libraries, DVNs, confirmations, executors, enforced options, endpoint delegate, and contract ownership. It cannot directly call an owner-only mint because none exists. A malicious peer or security configuration could nevertheless authorize unbacked remote supply or release locked Base collateral, so configuration authority is economically equivalent to bridge custody.
+
+Ownership renunciation is disabled. A future Safe migration starts a two-step ownership transfer; when the new Safe accepts, the contract atomically makes it the LayerZero endpoint delegate. Verify both roles after acceptance.
 
 The contracts deliberately omit upgrades, emergency pause, rescue, bridge fees, rate limits, and owner minting. This reduces privileged code paths but means incident response is configuration-based: remove or block pathways at LayerZero, never create a replacement adapter against the same collateral pool without a separately reviewed migration.
 

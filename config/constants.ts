@@ -7,6 +7,7 @@ export const EVE = {
     symbol: 'EVE',
     canonicalToken: '0xe7d192e52fa418236d6eecf7d5eb38da9dd11ba3',
     ownerAndDelegate: '0x603A8A2f22ac1d61E9c932A4F6Fa23170CEcb9Ff',
+    safeSingleton: '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762',
     safeThreshold: 2,
     safeOwners: ['0x4CF8e4D37F561815F208565a5b6Ca8a85b143205', '0x81709E16Bf99936891Cc720689f269103fabeD91'],
     sharedDecimals: 6,

@@ -23,8 +23,8 @@ contract EveBridgeTest is TestHelperOz5 {
 
     ERC20Mock private baseToken;
     EveOFTAdapter private baseAdapter;
-    EveOFT private robinhoodOFT;
-    EveOFT private thirdChainOFT;
+    EveOFT private robinhoodOft;
+    EveOFT private thirdChainOft;
     address private user;
     address private recipient = address(0xBEEF);
 
@@ -42,17 +42,17 @@ contract EveBridgeTest is TestHelperOz5 {
                 abi.encode(address(baseToken), address(endpoints[BASE_EID]), address(this))
             )
         );
-        robinhoodOFT = EveOFT(
+        robinhoodOft = EveOFT(
             _deployOApp(type(EveOFT).creationCode, abi.encode(address(endpoints[ROBINHOOD_EID]), address(this)))
         );
-        thirdChainOFT = EveOFT(
+        thirdChainOft = EveOFT(
             _deployOApp(type(EveOFT).creationCode, abi.encode(address(endpoints[THIRD_CHAIN_EID]), address(this)))
         );
 
         address[] memory oapps = new address[](3);
         oapps[0] = address(baseAdapter);
-        oapps[1] = address(robinhoodOFT);
-        oapps[2] = address(thirdChainOFT);
+        oapps[1] = address(robinhoodOft);
+        oapps[2] = address(thirdChainOft);
         this.wireOApps(oapps);
 
         baseToken.mint(user, INITIAL_BALANCE);
@@ -60,14 +60,14 @@ contract EveBridgeTest is TestHelperOz5 {
 
     function testConfigurationAndSupplyStartSafe() public view {
         assertEq(baseAdapter.owner(), address(this));
-        assertEq(robinhoodOFT.owner(), address(this));
+        assertEq(robinhoodOft.owner(), address(this));
         assertEq(baseAdapter.token(), address(baseToken));
-        assertEq(robinhoodOFT.token(), address(robinhoodOFT));
+        assertEq(robinhoodOft.token(), address(robinhoodOft));
         assertEq(baseAdapter.sharedDecimals(), 6);
-        assertEq(robinhoodOFT.sharedDecimals(), 6);
-        assertEq(robinhoodOFT.name(), "0xAgentEVE");
-        assertEq(robinhoodOFT.symbol(), "EVE");
-        assertEq(robinhoodOFT.totalSupply(), 0);
+        assertEq(robinhoodOft.sharedDecimals(), 6);
+        assertEq(robinhoodOft.name(), "0xAgentEVE");
+        assertEq(robinhoodOft.symbol(), "EVE");
+        assertEq(robinhoodOft.totalSupply(), 0);
     }
 
     function testOnlyOwnerCanConfigurePeer() public {
@@ -78,16 +78,16 @@ contract EveBridgeTest is TestHelperOz5 {
 
     function testBaseToRobinhoodAndBackPreservesAccessibleSupply() public {
         uint256 amount = 4 ether;
-        _sendFromBase(ROBINHOOD_EID, address(robinhoodOFT), user, amount, amount);
+        _sendFromBase(ROBINHOOD_EID, address(robinhoodOft), user, amount, amount);
 
         assertEq(baseToken.balanceOf(address(baseAdapter)), amount);
-        assertEq(robinhoodOFT.balanceOf(user), amount);
-        assertEq(baseToken.balanceOf(user) + robinhoodOFT.totalSupply(), INITIAL_BALANCE);
+        assertEq(robinhoodOft.balanceOf(user), amount);
+        assertEq(baseToken.balanceOf(user) + robinhoodOft.totalSupply(), INITIAL_BALANCE);
 
-        _sendFromOFT(robinhoodOFT, BASE_EID, address(baseAdapter), user, amount);
+        _sendFromOft(robinhoodOft, BASE_EID, address(baseAdapter), user, amount);
 
         assertEq(baseToken.balanceOf(address(baseAdapter)), 0);
-        assertEq(robinhoodOFT.totalSupply(), 0);
+        assertEq(robinhoodOft.totalSupply(), 0);
         assertEq(baseToken.balanceOf(user), INITIAL_BALANCE);
     }
 
@@ -96,45 +96,45 @@ contract EveBridgeTest is TestHelperOz5 {
         uint256 requested = 1 ether + dust;
         uint256 normalized = 1 ether;
 
-        _sendFromBase(ROBINHOOD_EID, address(robinhoodOFT), user, requested, normalized);
+        _sendFromBase(ROBINHOOD_EID, address(robinhoodOft), user, requested, normalized);
 
         assertEq(baseToken.balanceOf(user), INITIAL_BALANCE - normalized);
         assertEq(baseToken.balanceOf(address(baseAdapter)), normalized);
-        assertEq(robinhoodOFT.balanceOf(user), normalized);
+        assertEq(robinhoodOft.balanceOf(user), normalized);
     }
 
     function testDestinationTokenSupportsPermit() public {
         uint256 amount = 2 ether;
         uint256 allowance = 1 ether;
         uint256 deadline = block.timestamp + 1 days;
-        _sendFromBase(ROBINHOOD_EID, address(robinhoodOFT), user, amount, amount);
+        _sendFromBase(ROBINHOOD_EID, address(robinhoodOft), user, amount, amount);
 
         bytes32 structHash = keccak256(
-            abi.encode(PERMIT_TYPEHASH, user, recipient, allowance, robinhoodOFT.nonces(user), deadline)
+            abi.encode(PERMIT_TYPEHASH, user, recipient, allowance, robinhoodOft.nonces(user), deadline)
         );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", robinhoodOFT.DOMAIN_SEPARATOR(), structHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", robinhoodOft.DOMAIN_SEPARATOR(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(USER_KEY, digest);
 
-        robinhoodOFT.permit(user, recipient, allowance, deadline, v, r, s);
+        robinhoodOft.permit(user, recipient, allowance, deadline, v, r, s);
 
-        assertEq(robinhoodOFT.allowance(user, recipient), allowance);
-        assertEq(robinhoodOFT.nonces(user), 1);
+        assertEq(robinhoodOft.allowance(user, recipient), allowance);
+        assertEq(robinhoodOft.nonces(user), 1);
     }
 
     function testNewOFTCanJoinWithoutChangingBaseAdapter() public {
         uint256 amount = 3 ether;
-        _sendFromBase(ROBINHOOD_EID, address(robinhoodOFT), user, amount, amount);
-        _sendFromOFT(robinhoodOFT, THIRD_CHAIN_EID, address(thirdChainOFT), user, amount);
+        _sendFromBase(ROBINHOOD_EID, address(robinhoodOft), user, amount, amount);
+        _sendFromOft(robinhoodOft, THIRD_CHAIN_EID, address(thirdChainOft), user, amount);
 
-        assertEq(robinhoodOFT.totalSupply(), 0);
-        assertEq(thirdChainOFT.balanceOf(user), amount);
+        assertEq(robinhoodOft.totalSupply(), 0);
+        assertEq(thirdChainOft.balanceOf(user), amount);
         assertEq(baseToken.balanceOf(address(baseAdapter)), amount);
-        assertEq(baseToken.balanceOf(user) + thirdChainOFT.totalSupply(), INITIAL_BALANCE);
+        assertEq(baseToken.balanceOf(user) + thirdChainOft.totalSupply(), INITIAL_BALANCE);
     }
 
     function _sendFromBase(
         uint32 destinationEid,
-        address destinationOFT,
+        address destinationOft,
         address receiver,
         uint256 amount,
         uint256 minimumAmount
@@ -147,13 +147,13 @@ contract EveBridgeTest is TestHelperOz5 {
         baseAdapter.send{ value: fee.nativeFee }(sendParam, fee, payable(user));
         vm.stopPrank();
 
-        verifyPackets(destinationEid, addressToBytes32(destinationOFT));
+        verifyPackets(destinationEid, addressToBytes32(destinationOft));
     }
 
-    function _sendFromOFT(
+    function _sendFromOft(
         EveOFT source,
         uint32 destinationEid,
-        address destinationOFT,
+        address destinationOft,
         address receiver,
         uint256 amount
     ) private {
@@ -163,7 +163,7 @@ contract EveBridgeTest is TestHelperOz5 {
         vm.prank(user);
         source.send{ value: fee.nativeFee }(sendParam, fee, payable(user));
 
-        verifyPackets(destinationEid, addressToBytes32(destinationOFT));
+        verifyPackets(destinationEid, addressToBytes32(destinationOft));
     }
 
     function _sendParam(
@@ -173,6 +173,15 @@ contract EveBridgeTest is TestHelperOz5 {
         uint256 minimumAmount
     ) private pure returns (SendParam memory) {
         bytes memory options = OptionsBuilder.newOptions().addExecutorLzReceiveOption(200_000, 0);
-        return SendParam(destinationEid, addressToBytes32(receiver), amount, minimumAmount, options, "", "");
+        return
+            SendParam({
+                dstEid: destinationEid,
+                to: addressToBytes32(receiver),
+                amountLD: amount,
+                minAmountLD: minimumAmount,
+                extraOptions: options,
+                composeMsg: "",
+                oftCmd: ""
+            });
     }
 }

@@ -1,5 +1,6 @@
 [profile.default]
 solc = '0.8.26'
+evm_version = 'paris'
 src = 'contracts'
 out = 'out'
 test = 'test/foundry'
