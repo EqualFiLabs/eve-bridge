@@ -5,6 +5,7 @@
   "description": "LayerZero V2 bridge for canonical EVE on Base",
   "license": "BUSL-1.1",
   "scripts": {
+    "bridge": "ts-node scripts/bridge.ts",
     "compile": "concurrently -c auto --names forge,hardhat '$npm_execpath run compile:forge' '$npm_execpath run compile:hardhat'",
     "compile:forge": "forge build",
     "compile:hardhat": "hardhat compile",

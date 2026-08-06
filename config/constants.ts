@@ -7,10 +7,13 @@ export const EVE = {
     symbol: 'EVE',
     canonicalToken: '0xe7d192e52fa418236d6eecf7d5eb38da9dd11ba3',
     ownerAndDelegate: '0x603A8A2f22ac1d61E9c932A4F6Fa23170CEcb9Ff',
+    safeThreshold: 2,
+    safeOwners: ['0x4CF8e4D37F561815F208565a5b6Ca8a85b143205', '0x81709E16Bf99936891Cc720689f269103fabeD91'],
     sharedDecimals: 6,
 } as const
 
 export const CREATE2_FACTORY = '0x4e59b44847b379578588920cA78FbF26c0B4956C'
+export const CREATE2_FACTORY_RUNTIME_HASH = '0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989'
 
 export const BASE_ADAPTER_SALT_LABEL = 'EVE_BRIDGE_BASE_ADAPTER_V1'
 export const ROBINHOOD_OFT_SALT_LABEL = 'EVE_BRIDGE_ROBINHOOD_OFT_V1'
