@@ -9,7 +9,8 @@ Base EVE: 0xe7d192e52fa418236d6eecf7d5eb38da9dd11ba3
 Owner/delegate Safe: 0x603A8A2f22ac1d61E9c932A4F6Fa23170CEcb9Ff
 ```
 
-No bridge contracts have been deployed, wired, approved, or funded from this repository.
+The Base-Robinhood mainnet pathway is deployed, fully configured, and live. See the
+[deployment record](docs/deployments/base-robinhood-mainnet.md) for verified addresses, configuration, and round-trip canary evidence.
 
 ## Design
 
@@ -21,7 +22,7 @@ No bridge contracts have been deployed, wired, approved, or funded from this rep
 - The initial pathway requires LayerZero Labs and Nethermind DVNs, 20 confirmations each way, explicit executors, and 200,000 enforced receive gas.
 - Deployment uses the canonical CREATE2 factory with committed, domain-separated salts.
 
-See [architecture](docs/architecture.md), [security model](docs/security.md), [deployment runbook](docs/deployment-runbook.md), and [new-chain runbook](docs/add-chain.md).
+See [architecture](docs/architecture.md), [security model](docs/security.md), [deployment runbook](docs/deployment-runbook.md), [mainnet deployment record](docs/deployments/base-robinhood-mainnet.md), and [new-chain runbook](docs/add-chain.md).
 
 ## Development
 
