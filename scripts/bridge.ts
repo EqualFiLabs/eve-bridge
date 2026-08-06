@@ -34,6 +34,14 @@ type DeploymentPlan = {
     predictedAddress: string
     transaction: { to: string; data: string; value: string }
 }
+type UnsignedTransaction = {
+    order: number
+    description: string
+    chainId: number
+    to: string
+    data: string
+    value: string
+}
 
 const ERC20_ABI = [
     'function name() view returns (string)',
@@ -56,6 +64,15 @@ const ENDPOINT_ABI = [
     'function getReceiveLibrary(address,uint32) view returns (address,bool)',
     'function getConfig(address,address,uint32,uint32) view returns (bytes)',
 ]
+const ENDPOINT_CONFIGURATION_INTERFACE = new utils.Interface([
+    'function setSendLibrary(address,uint32,address)',
+    'function setReceiveLibrary(address,uint32,address,uint256)',
+    'function setConfig(address,address,(uint32 eid,uint32 configType,bytes config)[])',
+])
+const OAPP_CONFIGURATION_INTERFACE = new utils.Interface([
+    'function setEnforcedOptions((uint32 eid,uint16 msgType,bytes options)[])',
+    'function setPeer(uint32,bytes32)',
+])
 
 function parseArguments(values: string[]): { command: string; args: Arguments } {
     const [command = 'help', ...rest] = values
@@ -220,11 +237,119 @@ async function predict(): Promise<void> {
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)
 }
 
+function configurationTransactions(
+    chain: ChainName,
+    localAddress: string,
+    remoteAddress: string
+): UnsignedTransaction[] {
+    const local = NETWORKS[chain]
+    const remote = chain === 'base' ? NETWORKS.robinhood : NETWORKS.base
+    const executorConfig = utils.defaultAbiCoder.encode(
+        ['tuple(uint32 maxMessageSize,address executor)'],
+        [[10_000, local.executor]]
+    )
+    const ulnConfig = utils.defaultAbiCoder.encode(
+        [
+            'tuple(uint64 confirmations,uint8 requiredDVNCount,uint8 optionalDVNCount,uint8 optionalDVNThreshold,address[] requiredDVNs,address[] optionalDVNs)',
+        ],
+        [[PATHWAY.confirmations, local.requiredDvns.length, 0, 0, [...local.requiredDvns], []]]
+    )
+    const enforcedOptions = Options.newOptions()
+        .addExecutorLzReceiveOption(PATHWAY.receiveGas, PATHWAY.receiveValue)
+        .toHex()
+    const transaction = (order: number, description: string, to: string, data: string): UnsignedTransaction => ({
+        order,
+        description,
+        chainId: local.chainId,
+        to,
+        data,
+        value: '0',
+    })
+
+    return [
+        transaction(
+            1,
+            `Set ${chain} send library`,
+            local.endpoint,
+            ENDPOINT_CONFIGURATION_INTERFACE.encodeFunctionData('setSendLibrary', [
+                localAddress,
+                remote.eid,
+                local.sendLibrary,
+            ])
+        ),
+        transaction(
+            2,
+            `Set ${chain} receive library`,
+            local.endpoint,
+            ENDPOINT_CONFIGURATION_INTERFACE.encodeFunctionData('setReceiveLibrary', [
+                localAddress,
+                remote.eid,
+                local.receiveLibrary,
+                0,
+            ])
+        ),
+        transaction(
+            3,
+            `Set ${chain} send executor and ULN`,
+            local.endpoint,
+            ENDPOINT_CONFIGURATION_INTERFACE.encodeFunctionData('setConfig', [
+                localAddress,
+                local.sendLibrary,
+                [
+                    [remote.eid, 1, executorConfig],
+                    [remote.eid, 2, ulnConfig],
+                ],
+            ])
+        ),
+        transaction(
+            4,
+            `Set ${chain} receive ULN`,
+            local.endpoint,
+            ENDPOINT_CONFIGURATION_INTERFACE.encodeFunctionData('setConfig', [
+                localAddress,
+                local.receiveLibrary,
+                [[remote.eid, 2, ulnConfig]],
+            ])
+        ),
+        transaction(
+            5,
+            `Set ${chain} enforced receive options`,
+            localAddress,
+            OAPP_CONFIGURATION_INTERFACE.encodeFunctionData('setEnforcedOptions', [
+                [
+                    [remote.eid, 1, enforcedOptions],
+                    [remote.eid, 2, enforcedOptions],
+                ],
+            ])
+        ),
+        transaction(
+            6,
+            `Set ${chain} peer last`,
+            localAddress,
+            OAPP_CONFIGURATION_INTERFACE.encodeFunctionData('setPeer', [remote.eid, asBytes32(remoteAddress)])
+        ),
+    ]
+}
+
 async function prepare(args: Arguments): Promise<void> {
+    const predicted = plans()
     const manifest = {
         generatedAt: new Date().toISOString(),
         create2Factory: CREATE2_FACTORY,
-        deployments: Object.values(plans()),
+        deployments: Object.values(predicted),
+        pathwayTransactions: {
+            base: configurationTransactions(
+                'base',
+                predicted.base.predictedAddress,
+                predicted.robinhood.predictedAddress
+            ),
+            robinhood: configurationTransactions(
+                'robinhood',
+                predicted.robinhood.predictedAddress,
+                predicted.base.predictedAddress
+            ),
+        },
+        executionRule: 'Execute and verify steps 1-5 on both chains before either step 6 peer transaction.',
         warning:
             'Unsigned transactions. Verify hashes, chain IDs, target emptiness, and Safe simulation before execution.',
     }
