@@ -13,6 +13,8 @@ import { HardhatUserConfig, HttpNetworkAccountsUserConfig } from 'hardhat/types'
 
 import { EndpointId } from '@layerzerolabs/lz-definitions'
 
+import { EVE } from './config/constants'
+
 import './type-extensions'
 import './tasks/sendOFT'
 
@@ -56,18 +58,20 @@ const config: HardhatUserConfig = {
         ],
     },
     networks: {
-        'arbitrum-sepolia': {
-            eid: EndpointId.ARBSEP_V2_TESTNET,
-            url: process.env.RPC_URL_ARB_SEPOLIA || 'https://arbitrum-sepolia.gateway.tenderly.co',
-            accounts,
-        },
-        'base-sepolia': {
-            eid: EndpointId.BASESEP_V2_TESTNET,
-            url: process.env.RPC_URL_BASE_SEPOLIA || 'https://base-sepolia.gateway.tenderly.co',
+        base: {
+            chainId: 8453,
+            eid: EndpointId.BASE_V2_MAINNET,
+            url: process.env.BASE_MAINNET || '',
             accounts,
             oftAdapter: {
-                tokenAddress: '0x0', // Set the token address for the OFT adapter
+                tokenAddress: EVE.canonicalToken,
             },
+        },
+        robinhood: {
+            chainId: 4663,
+            eid: EndpointId.ROBINHOOD_V2_MAINNET,
+            url: process.env.ROBINHOOD_MAINNET || '',
+            accounts,
         },
         hardhat: {
             // Need this for testing because TestHelperOz5.sol is exceeding the compiled contract size limit
